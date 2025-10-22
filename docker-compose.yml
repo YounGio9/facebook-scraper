@@ -5,7 +5,7 @@ services:
     container_name: facebook-scraper-db
     restart: unless-stopped
     environment:
-      POSTGRES_USER: ${DB_USER:-scraper_user}
+      POSTGRES_USER: ${DB_USERNAME:-scraper_user}
       POSTGRES_PASSWORD: ${DB_PASSWORD:-scraper_password}
       POSTGRES_DB: ${DB_NAME:-facebook_scraper}
     ports:
@@ -15,7 +15,7 @@ services:
     networks:
       - scraper-network
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-scraper_user}"]
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USERNAME:-scraper_user}"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -37,9 +37,11 @@ services:
       # Database
       DB_HOST: postgres
       DB_PORT: 5432
-      DB_USER: ${DB_USER:-scraper_user}
+      DB_USERNAME: ${DB_USERNAME:-scraper_user}
       DB_PASSWORD: ${DB_PASSWORD:-scraper_password}
       DB_NAME: ${DB_NAME:-facebook_scraper}
+      DB_SYNCHRONIZE: ${DB_SYNCHRONIZE:-true}
+      DB_LOGGING: ${DB_LOGGING:-false}
 
       # Facebook Credentials
       FACEBOOK_EMAIL: ${FACEBOOK_EMAIL}
