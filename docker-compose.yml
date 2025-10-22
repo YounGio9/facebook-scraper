@@ -54,7 +54,7 @@ services:
       CHROME_BIN: /usr/bin/google-chrome-stable
       DISPLAY: :99
     volumes:
-      - ./cookies:/app/cookies
+      - cookies_data:/app/cookies
       - ./debug:/app/debug
       - ./logs:/app/logs
     depends_on:
@@ -73,6 +73,8 @@ services:
 
 volumes:
   postgres_data:
+    driver: local
+  cookies_data:
     driver: local
 
 networks:
