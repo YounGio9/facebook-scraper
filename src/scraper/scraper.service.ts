@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { BrowserService } from './services/browser.service';
 import { FacebookService } from './services/facebook.service';
+import { FacebookScraperService } from './services/facebook-scraper.service';
 import { CookieService } from './services/cookie.service';
 import { LoginDto } from './dto/login.dto';
 import { GroupPostsDto, GroupPostsResponse } from './dto/group-posts.dto';
@@ -15,6 +16,7 @@ export class ScraperService {
     private readonly configService: ConfigService,
     private readonly browserService: BrowserService,
     private readonly facebookService: FacebookService,
+    private readonly facebookScraperService: FacebookScraperService,
     private readonly cookieService: CookieService,
   ) {}
 
@@ -92,9 +94,17 @@ export class ScraperService {
         this.logger.log('Reusing existing browser session');
       }
 
-      // TODO: Implement scraping logic here
-      // The session is ready, now you can navigate to the group and scrape posts
-      throw new Error('Scraping method not yet implemented');
+      // Scrape the group posts using the FacebookScraperService
+      this.logger.log('Starting group posts scraping...');
+      const scrapedData = await this.facebookScraperService.scrapeGroupPosts(driver, groupPostsDto);
+
+      this.logger.log(`Successfully scraped ${scrapedData.posts.length} posts from group ${groupPostsDto.groupId}`);
+
+      return {
+        success: true,
+        message: `Successfully scraped ${scrapedData.posts.length} posts`,
+        data: scrapedData,
+      };
 
     } catch (error) {
       this.logger.error(`Failed to get group posts: ${error.message}`);
