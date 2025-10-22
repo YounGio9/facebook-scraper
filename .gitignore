@@ -42,6 +42,9 @@ lerna-debug.log*
 .env.production.local
 .env.local
 
+# Selenium session cookies
+cookies/
+
 # temp directory
 .temp
 .tmp
