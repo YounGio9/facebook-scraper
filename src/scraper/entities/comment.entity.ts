@@ -9,20 +9,20 @@ export class CommentEntity {
   @ManyToOne(() => GroupPostEntity, (post) => post.comments, { onDelete: 'CASCADE' })
   post: GroupPostEntity;
 
-  @Column({ nullable: true })
-  author_name: string | null;
+  @Column({ type: 'varchar', nullable: true })
+  author_name: string;
 
-  @Column({ nullable: true, type: 'text' })
-  author_url: string | null;
+  @Column({ type: 'text', nullable: true })
+  author_url: string;
 
   @Column({ type: 'text' })
   text: string;
 
-  @Column({ default: 0 })
+  @Column({ type: 'int', default: 0 })
   likes_count: number;
 
   @Column({ type: 'timestamp', nullable: true })
-  timestamp: Date | null;
+  timestamp: Date;
 
   @CreateDateColumn()
   created_at: Date;

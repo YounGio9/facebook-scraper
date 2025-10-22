@@ -11,41 +11,41 @@ export class GroupPostEntity {
   @Column({ type: 'text' })
   text: string;
 
-  @Column({ nullable: true })
-  author_name: string | null;
+  @Column({ type: 'varchar', nullable: true })
+  author_name: string;
 
-  @Column({ nullable: true, type: 'text' })
-  author_url: string | null;
+  @Column({ type: 'text', nullable: true })
+  author_url: string;
 
-  @Column({ nullable: true, type: 'text', unique: false })
-  url: string | null;
+  @Column({ type: 'text', nullable: true })
+  url: string;
 
-  @Column({ nullable: true })
-  content_hash: string | null;
+  @Column({ type: 'varchar', nullable: true })
+  content_hash: string;
 
   @Column({ type: 'timestamp', nullable: true })
-  timestamp: Date | null;
+  timestamp: Date;
 
-  @Column({ default: 0 })
+  @Column({ type: 'int', default: 0 })
   likes_count: number;
 
-  @Column({ default: 0 })
+  @Column({ type: 'int', default: 0 })
   comments_count: number;
 
-  @Column({ default: 0 })
+  @Column({ type: 'int', default: 0 })
   shares_count: number;
 
   @Column({ type: 'simple-array', nullable: true })
   images: string[];
 
-  @Column({ nullable: true })
-  title: string | null;
+  @Column({ type: 'varchar', nullable: true })
+  title: string;
 
-  @Column({ nullable: true })
-  price: string | null;
+  @Column({ type: 'varchar', nullable: true })
+  price: string;
 
-  @Column({ nullable: true })
-  location: string | null;
+  @Column({ type: 'varchar', nullable: true })
+  location: string;
 
   @OneToMany(() => CommentEntity, (comment) => comment.post, { cascade: true, eager: true })
   comments: CommentEntity[];
