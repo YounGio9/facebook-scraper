@@ -1,5 +1,5 @@
 # Stage 1: Build
-FROM node:20-alpine AS builder
+FROM node:20 AS builder
 
 WORKDIR /app
 
@@ -9,7 +9,7 @@ COPY package*.json ./
 # Install dependencies
 RUN npm ci
 
-# Copy source code
+# Copy source code (including prisma schema)
 COPY . .
 
 # Build the application
@@ -61,6 +61,13 @@ COPY package*.json ./
 # Install production dependencies only
 RUN npm install
 
+# Copy docker entrypoint script
+COPY ./docker-entrypoint.sh /docker-entrypoint.sh
+RUN chmod +x /docker-entrypoint.sh
+
+# Copy prisma schema (needed for migrations and generation)
+COPY --from=builder /app/prisma ./prisma
+
 # Copy built application from builder stage
 COPY --from=builder /app/dist ./dist
 
@@ -68,10 +75,13 @@ COPY --from=builder /app/dist ./dist
 RUN mkdir -p /app/cookies /app/debug && \
     chmod 777 /app/cookies /app/debug
 
-# Set environment variables for Chrome
+# Set environment variables
 ENV CHROME_BIN=/usr/bin/google-chrome-stable \
     PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true \
-    PUPPETEER_EXECUTABLE_PATH=/usr/bin/google-chrome-stable
+    PUPPETEER_EXECUTABLE_PATH=/usr/bin/google-chrome-stable \
+    PRISMA_GENERATE=ENABLE \
+    PRISMA_MIGRATION=ENABLE \
+    SERVICE_NAME="Facebook Scraper"
 
 # Expose port
 EXPOSE 8002
@@ -79,6 +89,9 @@ EXPOSE 8002
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
     CMD node -e "require('http').get('http://localhost:8002', (r) => {process.exit(r.statusCode === 200 ? 0 : 1)})"
+
+# Set entrypoint to handle Prisma setup
+ENTRYPOINT ["/docker-entrypoint.sh"]
 
 # Start the application
 CMD ["node", "dist/main"]

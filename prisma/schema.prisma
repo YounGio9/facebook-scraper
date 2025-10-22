@@ -1,0 +1,52 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model GroupPost {
+  id             String    @id @default(uuid()) @db.Uuid
+  text           String    @db.Text
+  author_name    String?   @db.VarChar
+  author_url     String?   @db.Text
+  url            String?   @db.Text
+  content_hash   String?   @db.VarChar
+  timestamp      DateTime?
+  likes_count    Int       @default(0)
+  comments_count Int       @default(0)
+  shares_count   Int       @default(0)
+  images         String[]
+  title          String?   @db.VarChar
+  price          String?   @db.VarChar
+  location       String?   @db.VarChar
+  created_at     DateTime  @default(now())
+  updated_at     DateTime  @updatedAt
+
+  comments Comment[]
+
+  @@index([url], name: "idx_post_url")
+  @@index([content_hash], name: "idx_content_hash")
+  @@map("group_posts")
+}
+
+model Comment {
+  id          String    @id @default(uuid()) @db.Uuid
+  author_name String?   @db.VarChar
+  author_url  String?   @db.Text
+  text        String    @db.Text
+  likes_count Int       @default(0)
+  timestamp   DateTime?
+  created_at  DateTime  @default(now())
+  updated_at  DateTime  @updatedAt
+
+  post_id String   @db.Uuid
+  post    GroupPost @relation(fields: [post_id], references: [id], onDelete: Cascade)
+
+  @@map("comments")
+}
