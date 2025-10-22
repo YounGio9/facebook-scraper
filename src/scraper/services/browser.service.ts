@@ -24,7 +24,15 @@ export class BrowserService implements OnModuleDestroy {
         options.addArguments('--headless');
       }
 
+      // DISABLE NOTIFICATIONS - Prevents Facebook notification dialogs from appearing
+      // Setting value to 2 means "block" (0=default, 1=allow, 2=block)
+      const prefs = {
+        'profile.default_content_setting_values.notifications': 2
+      };
+      options.setUserPreferences(prefs);
+
       // Add common arguments to avoid detection
+      options.addArguments('--disable-notifications'); // Additional layer to block notifications
       options.addArguments('--disable-blink-features=AutomationControlled');
       options.addArguments('--disable-dev-shm-usage');
       options.addArguments('--no-sandbox');
@@ -35,7 +43,7 @@ export class BrowserService implements OnModuleDestroy {
       options.addArguments('user-agent=Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
 
       // Exclude automation switches
-      options.excludeSwitches(['enable-automation']);
+      options.excludeSwitches('enable-automation');
       options.addArguments('--disable-blink-features=AutomationControlled');
 
       // Build the driver
@@ -63,7 +71,15 @@ export class BrowserService implements OnModuleDestroy {
   }
 
   async onModuleDestroy() {
-    await this.closeBrowser();
+    // Only close browser on app shutdown if configured to do so
+    const shouldCloseOnDestroy = this.configService.get<string>('BROWSER_CLOSE_ON_DESTROY') === 'true';
+
+    if (shouldCloseOnDestroy) {
+      this.logger.log('Closing browser on module destroy (BROWSER_CLOSE_ON_DESTROY=true)');
+      await this.closeBrowser();
+    } else {
+      this.logger.log('Keeping browser alive (BROWSER_CLOSE_ON_DESTROY not set or false)');
+    }
   }
 
   getDriver(): WebDriver | null {

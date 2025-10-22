@@ -23,8 +23,18 @@ export class CookieService {
       // Ensure cookies directory exists
       await this.ensureCookiesDirectory();
 
+      // Check if driver is valid
+      if (!driver) {
+        throw new Error('Driver is null or undefined');
+      }
+
       // Get all cookies from the browser
       const cookies = await driver.manage().getCookies();
+
+      // Check if cookies were retrieved
+      if (!cookies || !Array.isArray(cookies)) {
+        throw new Error('Failed to retrieve cookies from driver - session may have expired');
+      }
 
       // Save to file
       const cookiePath = path.join(this.cookiesDir, `${filename}.json`);

@@ -6,7 +6,6 @@ import { CookieService } from './cookie.service';
 export class FacebookService {
   private readonly logger = new Logger(FacebookService.name);
   private readonly FACEBOOK_URL = 'https://www.facebook.com';
-  private readonly TIMEOUT = 30000; // 30 seconds
   private readonly COOKIE_FILENAME = 'facebook-session';
 
   constructor(private readonly cookieService: CookieService) {}
@@ -52,10 +51,14 @@ export class FacebookService {
       this.logger.log('Performing fresh login to Facebook...');
       const loginResult = await this.performLogin(driver, email, password);
 
-      // If login was successful, save cookies for next time
-      if (loginResult.status === 'success' || loginResult.status === '2fa_required') {
+      // Only save cookies if login was fully successful (not if 2FA is pending)
+      if (loginResult.status === 'success') {
         this.logger.log('Saving session cookies for future use...');
-        await this.cookieService.saveCookies(driver, this.COOKIE_FILENAME);
+        try {
+          await this.cookieService.saveCookies(driver, this.COOKIE_FILENAME);
+        } catch (error) {
+          this.logger.warn(`Failed to save cookies, but login was successful: ${error.message}`);
+        }
       }
 
       return loginResult;
@@ -69,20 +72,55 @@ export class FacebookService {
   private async checkIfLoggedIn(driver: WebDriver): Promise<boolean> {
     try {
       const currentUrl = await driver.getCurrentUrl();
-      const pageSource = await driver.getPageSource();
+      this.logger.log(`Checking login status at URL: ${currentUrl}`);
 
-      // If we're NOT on login page and NOT on checkpoint, we're likely logged in
-      const notOnLoginPage = !currentUrl.includes('login.php') &&
-                             !currentUrl.includes('/login/');
-      const notOnCheckpoint = !currentUrl.includes('checkpoint');
+      // If we're on login page or checkpoint, definitely not logged in
+      if (currentUrl.includes('login.php') || currentUrl.includes('/login/')) {
+        this.logger.log('Detected login page in URL - NOT logged in');
+        return false;
+      }
 
-      // Additional check: look for elements that only appear when logged in
-      const hasLoggedInElements = pageSource.includes('data-click="profile_icon"') ||
-                                   pageSource.includes('Account Settings') ||
-                                   pageSource.includes('Settings & privacy') ||
-                                   currentUrl.includes('facebook.com/?');
+      if (currentUrl.includes('checkpoint') && !currentUrl.includes('facebook.com/')) {
+        this.logger.log('Detected checkpoint page - NOT logged in');
+        return false;
+      }
 
-      return notOnLoginPage && (notOnCheckpoint || hasLoggedInElements);
+      // Check for ABSENCE of login form elements (best indicator)
+      try {
+        const emailField = await driver.findElements(By.id('email'));
+        const passField = await driver.findElements(By.id('pass'));
+
+        if (emailField.length > 0 && passField.length > 0) {
+          this.logger.log('Found login form fields (email & password) - NOT logged in');
+          return false;
+        } else {
+          this.logger.log('Login form fields NOT found - likely logged in');
+        }
+      } catch (error) {
+        this.logger.warn(`Error checking for login form: ${error.message}`);
+      }
+
+      // Check for presence of feed or navigation elements (logged in indicator)
+      try {
+        const feedElements = await driver.findElements(By.css('div[role="feed"], div[role="main"], div[role="navigation"]'));
+        if (feedElements.length > 0) {
+          this.logger.log(`Found ${feedElements.length} feed/navigation elements - LOGGED IN`);
+          return true;
+        }
+      } catch (error) {
+        this.logger.warn(`Error checking for feed elements: ${error.message}`);
+      }
+
+      // Fallback: if we're on facebook.com main domain and not on login/checkpoint, assume logged in
+      if (currentUrl.includes('facebook.com') &&
+          !currentUrl.includes('login') &&
+          !currentUrl.includes('checkpoint')) {
+        this.logger.log('On Facebook main domain without login/checkpoint - assuming LOGGED IN');
+        return true;
+      }
+
+      this.logger.log('Could not determine login status - defaulting to NOT logged in');
+      return false;
     } catch (error) {
       this.logger.warn(`Error checking login status: ${error.message}`);
       return false;
@@ -148,12 +186,41 @@ export class FacebookService {
         this.logger.log('Waiting for 2FA completion (up to 2 minutes)...');
         await driver.sleep(120000); // Wait 2 minutes
 
-        // Save cookies after 2FA might be completed
-        return {
-          status: '2fa_required',
-          message: '2FA detected. Cookies will be saved after you complete verification.',
-          url: newUrl,
-        };
+        // Check if 2FA was completed
+        try {
+          this.logger.log('2FA wait complete, checking login status...');
+
+          // Get current page state (no refresh needed - user already completed 2FA)
+          const finalUrl = await driver.getCurrentUrl();
+          this.logger.log(`Current URL: ${finalUrl}`);
+
+          const isNowLoggedIn = await this.checkIfLoggedIn(driver);
+
+          this.logger.log(`After 2FA wait - URL: ${finalUrl}, Logged in: ${isNowLoggedIn}`);
+
+          if (isNowLoggedIn) {
+            this.logger.log('2FA completed successfully!');
+            return {
+              status: 'success',
+              message: '2FA completed successfully',
+              url: finalUrl,
+            };
+          } else {
+            this.logger.warn('2FA not completed or session expired');
+            return {
+              status: '2fa_required',
+              message: '2FA detected but not completed. Please try logging in again.',
+              url: finalUrl,
+            };
+          }
+        } catch (error) {
+          this.logger.error(`Error checking 2FA status: ${error.message}`);
+          return {
+            status: '2fa_required',
+            message: '2FA detected. Session may have expired.',
+            url: newUrl,
+          };
+        }
       }
 
       if (pageSource.includes('The password that you') ||

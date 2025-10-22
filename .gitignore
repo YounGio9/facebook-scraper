@@ -45,6 +45,9 @@ lerna-debug.log*
 # Selenium session cookies
 cookies/
 
+# Debug screenshots
+debug/
+
 # temp directory
 .temp
 .tmp
