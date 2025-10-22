@@ -1,17 +1,26 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { WebDriver, By, until, WebElement } from 'selenium-webdriver';
 import { GroupPost, Comment, GroupPostsDto } from '../dto/group-posts.dto';
+import { PostsRepositoryService } from './posts-repository.service';
 
 @Injectable()
 export class FacebookScraperService {
   private readonly logger = new Logger(FacebookScraperService.name);
   private readonly MOBILE_FACEBOOK_URL = 'https://m.facebook.com';
 
+  constructor(private readonly postsRepository: PostsRepositoryService) {}
+
   async scrapeGroupPosts(
     driver: WebDriver,
     groupPostsDto: GroupPostsDto,
-  ): Promise<{ name: string | null; member_count: number | null; posts: GroupPost[] }> {
+  ): Promise<{ name: string | null; member_count: number | null; posts: GroupPost[]; posts_saved: number; posts_skipped: number }> {
     const { groupId, maxPosts = 50, includeComments = true, maxCommentsPerPost = 20 } = groupPostsDto;
+
+    // Track seen posts in this session to avoid duplicates
+    const seenPostUrls = new Set<string>();
+    const seenPostHashes = new Set<string>();
+    let postsSaved = 0;
+    let postsSkipped = 0;
 
     try {
       // Navigate to mobile group page
@@ -35,14 +44,28 @@ export class FacebookScraperService {
       // Click "See More" buttons to expand truncated posts
       await this.expandAllPosts(driver);
 
-      // Extract posts
-      const posts = await this.extractPosts(driver, maxPosts, includeComments, maxCommentsPerPost);
-      this.logger.log(`Successfully extracted ${posts.length} posts`);
+      // Extract posts with incremental database saving
+      const posts = await this.extractPostsWithSaving(
+        driver,
+        maxPosts,
+        includeComments,
+        maxCommentsPerPost,
+        seenPostUrls,
+        seenPostHashes,
+      );
+
+      // Count saved vs skipped
+      postsSaved = posts.filter(p => p !== null).length;
+      postsSkipped = posts.length - postsSaved;
+
+      this.logger.log(`Successfully extracted ${posts.length} posts (saved: ${postsSaved}, skipped: ${postsSkipped})`);
 
       return {
         name: groupName,
         member_count: memberCount,
-        posts,
+        posts: posts.filter(p => p !== null), // Remove null entries (duplicates)
+        posts_saved: postsSaved,
+        posts_skipped: postsSkipped,
       };
     } catch (error) {
       this.logger.error(`Error scraping group posts: ${error.message}`);
@@ -107,33 +130,54 @@ export class FacebookScraperService {
 
     const maxScrollAttempts = Math.ceil(maxPosts / 10) + 5; // Estimate scroll attempts needed
     let scrollAttempts = 0;
-    let previousHeight = 0;
+    let previousPostCount = 0;
     let noNewContentCount = 0;
 
     while (scrollAttempts < maxScrollAttempts && noNewContentCount < 3) {
+      // Count posts before scrolling
+      const postCountBefore = await this.countVisiblePosts(driver);
+
       // Scroll to bottom
       await driver.executeScript('window.scrollTo(0, document.body.scrollHeight);');
-      await driver.sleep(2000); // Wait for content to load
+      this.logger.log(`Scrolling... (attempt ${scrollAttempts + 1}/${maxScrollAttempts})`);
 
-      // Check if new content loaded
-      const currentHeight = await driver.executeScript<number>('return document.body.scrollHeight;');
+      // Wait for initial content to start loading
+      await driver.sleep(2000);
 
-      if (currentHeight === previousHeight) {
+      // Wait for skeleton loaders to disappear (content fully loaded)
+      await this.waitForSkeletonLoadersToDisappear(driver);
+
+      // Additional wait for content to settle
+      await driver.sleep(2000);
+
+      // Count posts after scrolling and waiting
+      const postCountAfter = await this.countVisiblePosts(driver);
+
+      this.logger.log(`Posts count: ${postCountBefore} -> ${postCountAfter}`);
+
+      // Check if new posts were loaded
+      if (postCountAfter <= previousPostCount) {
         noNewContentCount++;
-        this.logger.log(`No new content loaded (attempt ${noNewContentCount}/3)`);
+        this.logger.log(`No new posts loaded (attempt ${noNewContentCount}/3)`);
       } else {
         noNewContentCount = 0;
-        this.logger.log(`Scroll attempt ${scrollAttempts + 1}: Page height increased`);
+        this.logger.log(`New posts loaded: +${postCountAfter - previousPostCount}`);
       }
 
-      previousHeight = currentHeight;
+      previousPostCount = postCountAfter;
       scrollAttempts++;
 
       // Try to click "See More Posts" button if it exists
       await this.clickSeeMorePostsButton(driver);
+
+      // If we already have enough posts, stop scrolling
+      if (postCountAfter >= maxPosts) {
+        this.logger.log(`Reached target post count: ${postCountAfter} >= ${maxPosts}`);
+        break;
+      }
     }
 
-    this.logger.log(`Scrolling complete after ${scrollAttempts} attempts`);
+    this.logger.log(`Scrolling complete after ${scrollAttempts} attempts, ${previousPostCount} posts found`);
   }
 
   private async clickSeeMorePostsButton(driver: WebDriver): Promise<void> {
@@ -185,6 +229,142 @@ export class FacebookScraperService {
         // No buttons found with this selector
       }
     }
+  }
+
+  private async extractPostsWithSaving(
+    driver: WebDriver,
+    maxPosts: number,
+    includeComments: boolean,
+    maxCommentsPerPost: number,
+    seenPostUrls: Set<string>,
+    seenPostHashes: Set<string>,
+  ): Promise<GroupPost[]> {
+    const posts: GroupPost[] = [];
+
+    try {
+      const postElements = await this.findPostElements(driver);
+
+      if (postElements.length === 0) {
+        this.logger.warn('No posts found');
+        return posts;
+      }
+
+      // Limit to maxPosts
+      const postsToProcess = Math.min(postElements.length, maxPosts);
+      this.logger.log(`Processing ${postsToProcess} posts...`);
+
+      for (let i = 0; i < postsToProcess; i++) {
+        try {
+          const post = await this.extractPostData(
+            driver,
+            postElements[i],
+            includeComments,
+            maxCommentsPerPost,
+          );
+
+          if (!post) {
+            continue;
+          }
+
+          // Check for duplicates in memory
+          const postHash = this.postsRepository.generateContentHash(post);
+          const isDuplicateInMemory =
+            (post.url && seenPostUrls.has(post.url)) ||
+            seenPostHashes.has(postHash);
+
+          if (isDuplicateInMemory) {
+            this.logger.debug(`Skipping duplicate post in memory: ${post.url || postHash.substring(0, 8)}`);
+            posts.push(post); // Add to array for counting but will be filtered later
+            continue;
+          }
+
+          // Check for duplicates in database
+          const isDuplicateInDB = await this.postsRepository.isPostExists(post);
+
+          if (isDuplicateInDB) {
+            this.logger.debug(`Skipping duplicate post in database: ${post.url || postHash.substring(0, 8)}`);
+            posts.push(post); // Add to array for counting but will be filtered later
+            continue;
+          }
+
+          // Save to database incrementally
+          const savedPost = await this.postsRepository.savePost(post);
+
+          if (savedPost) {
+            // Track in memory to avoid re-checking
+            if (post.url) {
+              seenPostUrls.add(post.url);
+            }
+            seenPostHashes.add(postHash);
+
+            posts.push(post);
+            this.logger.log(`Saved post ${i + 1}/${postsToProcess} to database`);
+          } else {
+            this.logger.warn(`Failed to save post ${i + 1}/${postsToProcess}`);
+          }
+        } catch (error) {
+          this.logger.warn(`Failed to extract/save post ${i + 1}: ${error.message}`);
+        }
+      }
+    } catch (error) {
+      this.logger.error(`Error extracting posts: ${error.message}`);
+    }
+
+    return posts;
+  }
+
+  private async findPostElements(driver: WebDriver): Promise<WebElement[]> {
+    const postSelectors = [
+      // Try to find posts by their container structure
+      By.xpath('//div[@role="feed"]//div[.//h2 and .//div[@dir="auto"]]'),
+      By.xpath('//div[.//h2[.//a] and .//div[@dir="auto"]]'),
+      By.xpath('//div[contains(@class, "x1ja2u2z") and .//div[@dir="auto"]]'),
+      // Fallback selectors
+      By.css('div[role="article"]'),
+      By.css('div[data-pagelet*="FeedUnit"]'),
+      By.css('article'),
+      By.css('div.userContentWrapper'), // Desktop Facebook
+      By.css('div.story_body_container'), // Mobile Facebook legacy
+      By.xpath('//div[@data-ft and contains(@data-ft, "top_level_post")]'),
+    ];
+
+    let postElements: WebElement[] = [];
+
+    // Try each selector until we find posts
+    for (const selector of postSelectors) {
+      try {
+        postElements = await driver.findElements(selector);
+        if (postElements.length > 0) {
+          this.logger.log(`Found ${postElements.length} potential posts using selector: ${selector}`);
+
+          // Validate that these are actually posts
+          const validPosts: WebElement[] = [];
+          for (const element of postElements) {
+            const hasText = await this.elementHasContent(element);
+            if (hasText) {
+              validPosts.push(element);
+            }
+          }
+
+          if (validPosts.length > 0) {
+            postElements = validPosts;
+            this.logger.log(`Validated ${postElements.length} actual posts`);
+            break;
+          }
+        }
+      } catch (error) {
+        this.logger.debug(`Selector failed: ${selector}`);
+        continue;
+      }
+    }
+
+    if (postElements.length === 0) {
+      this.logger.warn('No posts found with any selector');
+      // Try alternative approach - find all elements with user content
+      postElements = await this.findPostsByContent(driver);
+    }
+
+    return postElements;
   }
 
   private async extractPosts(
@@ -907,6 +1087,98 @@ export class FacebookScraperService {
       }
     } catch (error) {
       this.logger.warn('Page load wait timeout - continuing anyway');
+    }
+  }
+
+  // Helper method to wait for skeleton loaders to disappear
+  private async waitForSkeletonLoadersToDisappear(driver: WebDriver): Promise<void> {
+    try {
+      this.logger.debug('Waiting for skeleton loaders to disappear...');
+
+      // Common skeleton loader patterns on Facebook
+      const skeletonSelectors = [
+        By.css('[data-testid="placeholder"]'),
+        By.css('[role="progressbar"]'),
+        By.css('.placeholder'),
+        By.css('.loading'),
+        By.css('[aria-busy="true"]'),
+        By.css('[class*="skeleton"]'),
+        By.css('[class*="shimmer"]'),
+        By.css('[class*="placeholder"]'),
+      ];
+
+      // Wait for up to 5 seconds for skeletons to appear and disappear
+      const maxWaitTime = 5000;
+      const checkInterval = 500;
+      let elapsed = 0;
+
+      while (elapsed < maxWaitTime) {
+        let hasSkeletons = false;
+
+        for (const selector of skeletonSelectors) {
+          try {
+            const elements = await driver.findElements(selector);
+            if (elements.length > 0) {
+              hasSkeletons = true;
+              this.logger.debug(`Found ${elements.length} skeleton loaders`);
+              break;
+            }
+          } catch (error) {
+            // Selector not found, continue
+          }
+        }
+
+        if (!hasSkeletons) {
+          this.logger.debug('No skeleton loaders found - content loaded');
+          return;
+        }
+
+        await driver.sleep(checkInterval);
+        elapsed += checkInterval;
+      }
+
+      this.logger.debug('Skeleton loader wait timeout - continuing anyway');
+    } catch (error) {
+      this.logger.warn(`Error waiting for skeleton loaders: ${error.message}`);
+    }
+  }
+
+  // Helper method to count visible posts on the page
+  private async countVisiblePosts(driver: WebDriver): Promise<number> {
+    try {
+      const postSelectors = [
+        By.xpath('//div[@role="feed"]//div[.//h2 and .//div[@dir="auto"]]'),
+        By.xpath('//div[.//h2[.//a] and .//div[@dir="auto"]]'),
+        By.css('div[role="article"]'),
+        By.css('div[data-pagelet*="FeedUnit"]'),
+      ];
+
+      for (const selector of postSelectors) {
+        try {
+          const elements = await driver.findElements(selector);
+          if (elements.length > 0) {
+            // Validate elements have content
+            let validCount = 0;
+            for (const element of elements) {
+              const hasContent = await this.elementHasContent(element);
+              if (hasContent) {
+                validCount++;
+              }
+            }
+
+            if (validCount > 0) {
+              return validCount;
+            }
+          }
+        } catch (error) {
+          continue;
+        }
+      }
+
+      return 0;
+    } catch (error) {
+      this.logger.error(`Error counting posts: ${error.message}`);
+      return 0;
     }
   }
 

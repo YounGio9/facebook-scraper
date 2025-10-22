@@ -36,5 +36,7 @@ export interface GroupPostsResponse {
     name: string | null;
     member_count: number | null;
     posts: GroupPost[];
+    posts_saved: number;
+    posts_skipped: number;
   };
 }
