@@ -47,8 +47,6 @@ docs
 debug
 debug-*
 *.html
-cookies
-logs
 tmp
 temp
 
