@@ -34,7 +34,10 @@ services:
       NODE_ENV: ${NODE_ENV:-production}
       PORT: 8002
 
-      # Database
+      # Database (Prisma)
+      DATABASE_URL: postgresql://${DB_USERNAME:-scraper_user}:${DB_PASSWORD:-scraper_password}@postgres:5432/${DB_NAME:-facebook_scraper}
+
+      # Database (Legacy - kept for compatibility)
       DB_HOST: postgres
       DB_PORT: 5432
       DB_USERNAME: ${DB_USERNAME:-scraper_user}
